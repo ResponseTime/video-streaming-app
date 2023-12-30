@@ -1,29 +1,44 @@
 import express from "express";
-import ffmpeg from "fluent-ffmpeg";
+import { convert, deleteProcessedVideo, deleteRawVideo, downloadRaw, setupDir, uploadProcessed } from "./storage";
 
+setupDir();
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json())
 
-app.post("/process-video", (req, res) => {
-    const filePath = req.body.filePath;
-    const outFile = req.body.outFile;
-
-    if (!filePath || !outFile) {
-        res.status(400).json({ message: "Invalid file" });
+app.post("/process-video", async (req, res) => {
+    let data;
+    try {
+        const message = Buffer.from(req.body.message.data, 'base64').toString('utf8');
+        data = JSON.parse(message)
+        if (!data.name) {
+            throw new Error(`Invalid message payload received`);
+        }
     }
-    ffmpeg(filePath)
-        .outputOption("-vf", "scale=-1:360")
-        .on("end", (err) => {
-            res.status(200).json({
-                message: "Video finished"
-            });
-        })
-        .on("error", (err) => {
-            console.log(err.message);
-            res.status(500).json({ message: err.message });
-        })
-        .save(outFile);
+    catch (err) {
+        console.log(err);
+        return res.status(400).json({ err })
+    }
+    const inputFile = data.name;
+    const processedFile = `processed-${inputFile}`;
+
+    await downloadRaw(inputFile);
+    try {
+        await convert(inputFile, processedFile)
+    }
+    catch (err) {
+        await Promise.all([
+            deleteRawVideo(inputFile),
+            deleteProcessedVideo(processedFile)
+        ])
+        return res.status(500).json({ err })
+    }
+    await uploadProcessed(processedFile);
+    await Promise.all([
+        deleteRawVideo(inputFile),
+        deleteProcessedVideo(processedFile)
+    ])
+    res.status(200).json({ success: true })
 });
 
 app.listen(port, () => {
